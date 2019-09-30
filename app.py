@@ -4,7 +4,8 @@ from werkzeug.utils import secure_filename
 from flask_cors import CORS
 from flask_session import Session
 from werkzeug.utils import secure_filename
-
+import glob
+import uuid
 
 app = Flask(__name__, static_folder = "./static", template_folder = "static")
 cors = CORS(app, resources={r"/api/*": {"origins": "*"}})
@@ -16,8 +17,17 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 import essentia
 import essentia.standard as es
 
+def getUniquePath(folder, filename):
+   path = os.path.join(folder, filename)
+   while os.path.exists(path):
+        path = path.split('.')[0] + ''.join(random.choice(string.ascii_lowercase) for i in range(10)) + '.' + path.split('.')[1]
+   return path
+
 def get_detection():
-    _file = os.path.join(app.config['UPLOAD_FOLDER'], '1.mp3')
+    files_path = os.path.join(app.config['UPLOAD_FOLDER'], '*')
+    files = sorted(
+        glob.iglob(files_path), key=os.path.getctime, reverse=True) 
+    _file = os.path.join(app.config['UPLOAD_FOLDER'], files[0])
     features, features_frames = es.MusicExtractor(
             lowlevelStats=['mean', 'stdev'],
             rhythmStats=['mean', 'stdev'],
@@ -28,7 +38,8 @@ def get_detection():
     
     return jsonify(
         bpm = features['rhythm.bpm'],
-        key = features['tonal.key_edma.scale']
+        key = features['tonal.key_edma.key'],
+        scale = features['tonal.key_edma.scale']
     )
 
 def allowed_file(filename):
@@ -39,33 +50,43 @@ def allowed_file(filename):
 def get_analysis():
     return get_detection()
 
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/api/upload', methods=['GET', 'POST'])
 def upload_file():
+    if request.method == 'GET':
+        return 'Welcome to upload'
     if request.method == 'POST':
-        # check if the post request has the file part
-        if 'file' not in request.files:
-            flash('No file part')
-            return redirect(request.url)
-        file = request.files['file']
-        # if user does not select file, browser also
-        # submit an empty part without filename
-        if file.filename == '':
-            flash('No selected file')
-            return redirect(request.url)
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        target = app.config['UPLOAD_FOLDER']
+        if not os.path.isdir(target):
+            os.makedirs(target)
 
-            return 'successfully uploaded'
-    return '''
-    <!doctype html>
-    <title>Upload new File</title>
-    <h1>Upload new File</h1>
-    <form method=post enctype=multipart/form-data>
-      <input type=file name=file>
-      <input type=submit value=Upload>
-    </form>
-    '''
+        try:
+            _file = request.files['files']
+
+            if 'files' not in request.files:
+                flash('No file part')
+                return redirect(request.url)
+            
+            if _file.filename == '':
+                flash('No selected file')
+                return redirect(request.url)
+
+            if _file and allowed_file(_file.filename):
+                filename = secure_filename(_file.filename)
+
+                _file_url = os.path.join(app.config['UPLOAD_FOLDER'], str(uuid.uuid4()) + '_' + filename)
+                _file.save(_file_url)
+                return jsonify({'ok': True, 'message': 'File uploaded successfully!'}), 200
+            else:
+                return jsonify({'ok': False, 'message': 'Bad request parameters!'}), 400
+
+        except Exception as e:
+            return(str(e))
+
+@app.errorhandler(404)
+def page_not_found(e):
+    return "Page not found"
 
 if __name__ == '__main__':
+    app.secret_key = 'super secret key'
+    app.debug = True
     app.run()
